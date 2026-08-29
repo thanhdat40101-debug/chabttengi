@@ -19,7 +19,7 @@ def run_web():
     web_app.run(host="0.0.0.0", port=port)
 
 # --- BOT TELEGRAM ---
-TELEGRAM_BOT_TOKEN = "8662342747:AAEBP4wIDnUD4Ts-uU2KHhIMhv_QGH-bi4Y"
+TELEGRAM_BOT_TOKEN = "8662342747:AAFGSyvziio3uPNdKbhnhJMee33YbLaV290"
 DATA_API_URL = "https://kwinstore.com/hitclub/md5/8167b2c16888dae174a454f493022e22242f35288df59f41"
 INTERVAL_SECONDS = 3
 
