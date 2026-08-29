@@ -1,23 +1,36 @@
 import asyncio
 import logging
+import os
+import threading
 import requests
+from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# --- CẤU HÌNH ---
+# --- WEB SERVER ĐỂ KEEP-ALIVE ---
+web_app = Flask(__name__)
+
+@web_app.route('/')
+def home():
+    return "Bot đang chạy!", 200
+
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    web_app.run(host="0.0.0.0", port=port)
+
+# --- BOT TELEGRAM ---
 TELEGRAM_BOT_TOKEN = "8662342747:AAEBP4wIDnUD4Ts-uU2KHhIMhv_QGH-bi4Y"
 DATA_API_URL = "https://kwinstore.com/hitclub/md5/8167b2c16888dae174a454f493022e22242f35288df59f41"
-INTERVAL_SECONDS = 3  # Quét dữ liệu mỗi 3 giây
+INTERVAL_SECONDS = 3
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
 active_chats = set()
-last_phien = None  # Lưu số phiên gần nhất
+last_phien = None
 
 def fetch_api_data():
-    """Lấy dữ liệu từ API bàn T"""
     try:
         response = requests.get(DATA_API_URL, timeout=10)
         if response.status_code == 200:
@@ -27,7 +40,6 @@ def fetch_api_data():
     return None
 
 def format_message(data):
-    """Định dạng chữ thường gọn gàng, dễ xem"""
     if not isinstance(data, dict):
         return f"Dữ liệu: {str(data)}"
     
@@ -50,7 +62,6 @@ def format_message(data):
     return str(data)
 
 async def auto_fetch_loop(app: Application):
-    """Vòng lặp tự động - Chỉ gửi khi có PHIÊN MỚI"""
     global last_phien
     while True:
         if active_chats:
@@ -59,7 +70,6 @@ async def auto_fetch_loop(app: Application):
                 inner_data = res.get("data", {})
                 current_phien = inner_data.get("phien") if isinstance(inner_data, dict) else None
                 
-                # Chỉ gửi tin nhắn khi có số PHIÊN MỚI
                 if current_phien and current_phien != last_phien:
                     last_phien = current_phien
                     message = format_message(res)
@@ -76,7 +86,6 @@ async def auto_fetch_loop(app: Application):
         await asyncio.sleep(INTERVAL_SECONDS)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lệnh /start"""
     chat_id = update.effective_chat.id
     active_chats.add(chat_id)
     await update.message.reply_text(
@@ -85,7 +94,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lệnh /stop"""
     chat_id = update.effective_chat.id
     if chat_id in active_chats:
         active_chats.remove(chat_id)
@@ -97,8 +105,10 @@ async def post_init(application: Application):
     asyncio.create_task(auto_fetch_loop(application))
 
 def main():
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
+    # Chạy Web Server ở luồng riêng (ngầm)
+    threading.Thread(target=run_web, daemon=True).start()
 
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stop", stop))
 
