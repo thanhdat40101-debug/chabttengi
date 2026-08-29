@@ -21,9 +21,10 @@ def run_web():
 # --- CẤU HÌNH API & BOT ---
 TELEGRAM_BOT_TOKEN = "8662342747:AAFGSyvziio3uPNdKbhnhJMee33YbLaV290"
 
-# API Phiên hiện tại & API Lịch sử MD5
-API_CURRENT = "https://kwinstore.com/hitclub/md5/8167b2c16888dae174a454f493022e22242f35288df59f41"
-API_HISTORY = "https://kwinstore.com/hitclub/md5/history/8167b2c16888dae174a454f493022e22242f35288df59f41"
+# Các đường dẫn API
+API_MD5_CURRENT = "https://kwinstore.com/hitclub/md5/8167b2c16888dae174a454f493022e22242f35288df59f41"
+API_MD5_HISTORY = "https://kwinstore.com/hitclub/md5/history/8167b2c16888dae174a454f493022e22242f35288df59f41"
+API_THUONG_CURRENT = "https://kwinstore.com/hitclub/tx/8167b2c16888dae174a454f493022e22242f35288df59f41"
 
 INTERVAL_SECONDS = 3  # Quét dữ liệu mỗi 3 giây
 
@@ -32,7 +33,7 @@ logging.basicConfig(
 )
 
 active_chats = set()
-last_phien = None
+last_phien_md5 = None
 
 def fetch_json(url):
     """Hàm phụ trợ lấy dữ liệu JSON từ API"""
@@ -44,44 +45,59 @@ def fetch_json(url):
         logging.error(f"Lỗi khi lấy dữ liệu từ {url}: {e}")
     return None
 
-def format_combined_message(current_data, history_data):
-    """Định dạng kết hợp Bàn MD5 và Lịch sử MD5"""
+def extract_session_info(data_json):
+    """Trích xuất thông tin phiên gọn gàng"""
+    if not isinstance(data_json, dict):
+        return None
+    inner = data_json.get("data", {})
+    if isinstance(inner, dict):
+        return {
+            "phien": inner.get("phien", "---"),
+            "ket_qua": inner.get("ket_qua", "---"),
+            "tong": inner.get("tong", "---"),
+            "x1": inner.get("xuc_xac_1", "-"),
+            "x2": inner.get("xuc_xac_2", "-"),
+            "x3": inner.get("xuc_xac_3", "-"),
+            "thoi_gian": inner.get("thoi_gian", "---")
+        }
+    return None
+
+def format_all_data(md5_cur, md5_hist, thuong_cur):
+    """Ghép toàn bộ thông tin Bàn MD5, Lịch sử MD5 và Bàn Thường"""
     msg = ""
     
-    # 1. PHẦN BÀN MD5 (Phiên hiện tại)
-    if isinstance(current_data, dict):
-        inner_cur = current_data.get("data", {})
-        if isinstance(inner_cur, dict):
-            phien = inner_cur.get("phien", "---")
-            ket_qua = inner_cur.get("ket_qua", "---")
-            tong = inner_cur.get("tong", "---")
-            x1 = inner_cur.get("xuc_xac_1", "-")
-            x2 = inner_cur.get("xuc_xac_2", "-")
-            x3 = inner_cur.get("xuc_xac_3", "-")
-            thoi_gian = inner_cur.get("thoi_gian", "---")
+    # 1. BÀN MD5 HIỆN TẠI
+    info_md5 = extract_session_info(md5_cur)
+    if info_md5:
+        msg += (
+            f"🎲 **BÀN MD5**\n"
+            f"• Phiên: `{info_md5['phien']}`\n"
+            f"• Kết quả: {info_md5['ket_qua']} (Tổng: {info_md5['tong']})\n"
+            f"• Xúc xắc: {info_md5['x1']} - {info_md5['x2']} - {info_md5['x3']}\n"
+            f"• Thời gian: {info_md5['thoi_gian']}\n\n"
+        )
 
-            msg += (
-                f"🎲 **BÀN MD5 HIỆN TẠI**\n"
-                f"• Phiên: `{phien}`\n"
-                f"• Kết quả: {ket_qua} (Tổng: {tong})\n"
-                f"• Xúc xắc: {x1} - {x2} - {x3}\n"
-                f"• Thời gian: {thoi_gian}\n\n"
-            )
+    # 2. BÀN THƯỜNG HIỆN TẠI
+    info_thuong = extract_session_info(thuong_cur)
+    if info_thuong:
+        msg += (
+            f"⚡ **BÀN THƯỜNG**\n"
+            f"• Phiên: `{info_thuong['phien']}`\n"
+            f"• Kết quả: {info_thuong['ket_qua']} (Tổng: {info_thuong['tong']})\n"
+            f"• Xúc xắc: {info_thuong['x1']} - {info_thuong['x2']} - {info_thuong['x3']}\n"
+            f"• Thời gian: {info_thuong['thoi_gian']}\n\n"
+        )
     
-    # 2. PHẦN LỊCH SỬ BÀN MD5 (Lấy 5 phiên gần nhất)
-    msg += "📜 **LỊCH SỬ BÀN MD5 (5 phiên gần nhất)**\n"
-    
-    # Tự động nhận diện mảng lịch sử (dù trả về list trực tiếp hay nằm trong key "data")
+    # 3. LỊCH SỬ BÀN MD5 (5 phiên gần nhất)
+    msg += "📜 **LỊCH SỬ MD5 (5 phiên gần nhất)**\n"
     history_list = []
-    if isinstance(history_data, list):
-        history_list = history_data
-    elif isinstance(history_data, dict):
-        history_list = history_data.get("data", [])
+    if isinstance(md5_hist, list):
+        history_list = md5_hist
+    elif isinstance(md5_hist, dict):
+        history_list = md5_hist.get("data", [])
     
     if isinstance(history_list, list) and len(history_list) > 0:
-        # Lấy 5 phiên mới nhất
-        recent_items = history_list[:5]
-        for item in recent_items:
+        for item in history_list[:5]:
             if isinstance(item, dict):
                 h_phien = item.get("phien", "---")
                 h_kq = item.get("ket_qua", "---")
@@ -97,24 +113,25 @@ def format_combined_message(current_data, history_data):
     return msg
 
 async def auto_fetch_loop(app: Application):
-    """Vòng lặp quét API - Chỉ gửi khi có PHIÊN MỚI"""
-    global last_phien
+    """Vòng lặp tự động quét dữ liệu và đẩy về Telegram khi có phiên mới"""
+    global last_phien_md5
     while True:
         if active_chats:
-            cur_res = fetch_json(API_CURRENT)
-            if cur_res and isinstance(cur_res, dict):
-                inner_data = cur_res.get("data", {})
+            md5_cur_res = fetch_json(API_MD5_CURRENT)
+            if md5_cur_res and isinstance(md5_cur_res, dict):
+                inner_data = md5_cur_res.get("data", {})
                 current_phien = inner_data.get("phien") if isinstance(inner_data, dict) else None
                 
-                # Khi có phiên mới, lấy tiếp dữ liệu Lịch sử và gửi
-                if current_phien and current_phien != last_phien:
-                    last_phien = current_phien
+                # Chỉ phát tin nhắn mới khi Bàn MD5 sang phiên mới
+                if current_phien and current_phien != last_phien_md5:
+                    last_phien_md5 = current_phien
                     
-                    # Lấy dữ liệu API Lịch sử
-                    hist_res = fetch_json(API_HISTORY)
+                    # Quét thêm Lịch sử MD5 và Bàn Thường
+                    md5_hist_res = fetch_json(API_MD5_HISTORY)
+                    thuong_cur_res = fetch_json(API_THUONG_CURRENT)
                     
-                    # Ghép thông tin thành 1 tin nhắn duy nhất
-                    message = format_combined_message(cur_res, hist_res)
+                    # Tổng hợp nội dung
+                    message = format_all_data(md5_cur_res, md5_hist_res, thuong_cur_res)
                     
                     for chat_id in list(active_chats):
                         try:
@@ -132,8 +149,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     active_chats.add(chat_id)
     await update.message.reply_text(
-        "✅ Đã bật tự động nhận dữ liệu Bàn MD5 & Lịch sử MD5!\n"
-        "Bot sẽ tự động gửi thông báo khi xuất hiện PHIÊN MỚI."
+        "✅ Đã bật tự động nhận dữ liệu!\n"
+        "Bot sẽ tự động tổng hợp Bàn MD5, Bàn Thường & Lịch sử MD5 mỗi khi có phiên mới."
     )
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
