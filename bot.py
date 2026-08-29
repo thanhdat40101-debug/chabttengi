@@ -14,7 +14,7 @@ logging.basicConfig(
 )
 
 active_chats = set()
-last_phien = None  # Luu tru so phien gan nhat de so sanh
+last_phien = None  # Lưu số phiên gần nhất
 
 def fetch_api_data():
     """Lấy dữ liệu từ API bàn T"""
@@ -27,11 +27,10 @@ def fetch_api_data():
     return None
 
 def format_message(data):
-    """Định dạng chữ thường, trình bày gọn gàng, dễ nhìn"""
+    """Định dạng chữ thường gọn gàng, dễ xem"""
     if not isinstance(data, dict):
         return f"Dữ liệu: {str(data)}"
     
-    # Lấy thông tin từ object 'data' bên trong JSON
     inner_data = data.get("data", {})
     if isinstance(inner_data, dict):
         phien = inner_data.get("phien", "---")
@@ -42,18 +41,16 @@ def format_message(data):
         x3 = inner_data.get("xuc_xac_3", "-")
         thoi_gian = inner_data.get("thoi_gian", "---")
 
-        msg = (
+        return (
             f"🎲 Phiên: {phien}\n"
             f"📊 Kết quả: {ket_qua} (Tổng: {tong})\n"
             f"🎯 Xúc xắc: {x1} - {x2} - {x3}\n"
             f"⏰ Thời gian: {thoi_gian}"
         )
-        return msg
-    
     return str(data)
 
 async def auto_fetch_loop(app: Application):
-    """Vòng lặp tự động - Chỉ gửi khi số PHIÊN thay đổi"""
+    """Vòng lặp tự động - Chỉ gửi khi có PHIÊN MỚI"""
     global last_phien
     while True:
         if active_chats:
@@ -62,7 +59,7 @@ async def auto_fetch_loop(app: Application):
                 inner_data = res.get("data", {})
                 current_phien = inner_data.get("phien") if isinstance(inner_data, dict) else None
                 
-                # Chỉ gửi tin nhắn khi có số PHIÊN mới
+                # Chỉ gửi tin nhắn khi có số PHIÊN MỚI
                 if current_phien and current_phien != last_phien:
                     last_phien = current_phien
                     message = format_message(res)
@@ -79,7 +76,7 @@ async def auto_fetch_loop(app: Application):
         await asyncio.sleep(INTERVAL_SECONDS)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lệnh /start: Bật tự động nhận dữ liệu"""
+    """Lệnh /start"""
     chat_id = update.effective_chat.id
     active_chats.add(chat_id)
     await update.message.reply_text(
@@ -88,7 +85,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lệnh /stop: Tắt tự động"""
+    """Lệnh /stop"""
     chat_id = update.effective_chat.id
     if chat_id in active_chats:
         active_chats.remove(chat_id)
