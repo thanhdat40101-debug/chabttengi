@@ -36,63 +36,55 @@ def fetch_json(url):
         if res.status_code == 200:
             return res.json()
     except Exception as e:
-        logging.error(f"Lỗi kết nối API: {e}")
+        logging.error(f"lỗi kết nối api: {e}")
     return None
 
-def extract_history_list(history_data):
-    if not history_data:
-        return []
-    if isinstance(history_data, list):
-        return history_data
-    if isinstance(history_data, dict):
+def extract_first_item(data):
+    if not data:
+        return None
+    if isinstance(data, list) and len(data) > 0:
+        return data[0]
+    if isinstance(data, dict):
         for key in ["data", "history", "list", "results", "rows"]:
-            if key in history_data and isinstance(history_data[key], list):
-                return history_data[key]
-    return []
+            if key in data and isinstance(data[key], list) and len(data[key]) > 0:
+                return data[key][0]
+    return None
 
-def format_all_lowercase_message(md5_hist):
-    hist_list = extract_history_list(md5_hist)
+def format_single_item(item):
+    """Đọc dữ liệu chuẩn theo đúng key trong ảnh API và hạ về chữ thường"""
+    if not isinstance(item, dict):
+        return "không có dữ liệu."
+
+    # Lấy đúng key từ JSON thực tế
+    phien = str(item.get("phien", "---")).lower()
+    kq = str(item.get("kết quả") or item.get("ket_qua") or "---").lower()
+    tong = str(item.get("tổng") or item.get("tong") or "---").lower()
     
-    if not hist_list:
-        return "⚠️ không lấy được dữ liệu từ api (api bị lỗi hoặc đổi cấu trúc)."
-
-    msg = "📜 **lịch sử bàn md5 (chữ thường)**\n\n"
-    for item in hist_list[:5]:
-        if isinstance(item, dict):
-            phien = str(item.get("phien") or item.get("session") or "---").lower()
-            kq = str(item.get("ket_qua") or item.get("result") or "---").lower()
-            tong = str(item.get("tong") or item.get("total") or "---").lower()
-            
-            x1 = item.get("xuc_xac_1") if item.get("xuc_xac_1") is not None else item.get("dice1")
-            x2 = item.get("xuc_xac_2") if item.get("xuc_xac_2") is not None else item.get("dice2")
-            x3 = item.get("xuc_xac_3") if item.get("xuc_xac_3") is not None else item.get("dice3")
-            
-            if x1 is not None and x2 is not None and x3 is not None:
-                dice_str = f"{x1}-{x2}-{x3}"
-            else:
-                dice_str = str(item.get("xuc_xac") or item.get("dices") or "----").lower()
-
-            msg += f"• #{phien}: {kq} (tổng: {tong}) | [{dice_str}]\n"
-        else:
-            msg += f"• {str(item).lower()}\n"
-
-    return msg
+    d1 = item.get("d1", "-")
+    d2 = item.get("d2", "-")
+    d3 = item.get("d3", "-")
+    
+    return (
+        f"🎲 **kết quả bàn md5**\n"
+        f"• phiên: `{phien}`\n"
+        f"• kết quả: {kq} (tổng: {tong})\n"
+        f"• xúc xắc: {d1} - {d2} - {d3}"
+    )
 
 async def auto_fetch_loop(app: Application):
     global last_phien
     while True:
         if active_chats:
-            hist_res = fetch_json(API_MD5_HISTORY)
-            hist_list = extract_history_list(hist_res)
+            raw_data = fetch_json(API_MD5_HISTORY)
+            first_item = extract_first_item(raw_data)
             
-            if hist_list and len(hist_list) > 0:
-                first_item = hist_list[0] if isinstance(hist_list[0], dict) else {}
-                current_phien = first_item.get("phien") or first_item.get("session")
+            if first_item and isinstance(first_item, dict):
+                current_phien = first_item.get("phien")
                 
-                # Bắt buộc gửi nếu là phiên mới
-                if current_phien and current_phien != last_phien:
+                # Chỉ phát tin nhắn khi có phiên mới
+                if current_phien and str(current_phien) != str(last_phien):
                     last_phien = current_phien
-                    message = format_all_lowercase_message(hist_res)
+                    message = format_single_item(first_item)
                     
                     for chat_id in list(active_chats):
                         try:
@@ -102,7 +94,7 @@ async def auto_fetch_loop(app: Application):
                                 parse_mode="Markdown"
                             )
                         except Exception as e:
-                            logging.error(f"Lỗi gửi tin tới chat {chat_id}: {e}")
+                            logging.error(f"lỗi gửi tin tới chat {chat_id}: {e}")
         
         await asyncio.sleep(INTERVAL_SECONDS)
 
@@ -110,15 +102,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     active_chats.add(chat_id)
     
-    # Lấy dữ liệu kiểm tra ngay lập tức khi người dùng bấm /start
-    hist_res = fetch_json(API_MD5_HISTORY)
-    test_msg = format_all_lowercase_message(hist_res)
+    raw_data = fetch_json(API_MD5_HISTORY)
+    first_item = extract_first_item(raw_data)
     
-    await update.message.reply_text(
-        "✅ đã bật tự động nhận dữ liệu lịch sử bàn md5!\n\n"
-        "🔍 **kết quả kiểm tra api hiện tại:**\n" + test_msg,
-        parse_mode="Markdown"
-    )
+    if first_item:
+        msg = "✅ đã bật tự động nhận dữ liệu bàn md5!\n\n" + format_single_item(first_item)
+    else:
+        msg = "✅ đã bật tự động!\n\n⚠️ không kết nối được tới api."
+        
+    await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
