@@ -4,7 +4,7 @@ import os
 import threading
 import requests
 from flask import Flask
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # --- WEB SERVER KEEP-ALIVE ---
@@ -29,7 +29,7 @@ logging.basicConfig(
 
 active_chats = set()
 last_phien = None
-last_prediction = None  # Lưu dự đoán của phiên gần nhất để kiểm tra
+last_prediction = None
 
 def fetch_json(url):
     try:
@@ -44,7 +44,7 @@ def fetch_json(url):
     return None
 
 def extract_history_items(data):
-    """Chỉ lấy những phiên ĐÃ HOÀN TẤT (có xúc xắc hoặc kết quả)"""
+    """Chỉ lấy những phiên ĐÃ HOÀN TẤT"""
     if not data:
         return []
     
@@ -78,7 +78,7 @@ def get_phien_id(item):
     return None
 
 def get_kq_type(item):
-    """Xác định kết quả là tài hay xỉu (trả về 't' hoặc 'x')"""
+    """Xác định kết quả là tài hay xỉu ('t' hoặc 'x')"""
     if not isinstance(item, dict):
         return 't'
     
@@ -105,7 +105,7 @@ def get_kq_type(item):
     return 't'
 
 def generate_cau_string(items, limit=10):
-    """Tạo chuỗi 10 phiên cầu: t -> 🔴 (đỏ), x -> ⚪ (trắng)"""
+    """Tạo chuỗi 10 phiên cầu"""
     recent = items[:limit]
     recent_reversed = list(reversed(recent))
     
@@ -186,8 +186,42 @@ def predict_next(items):
     
     return final_pred, conf, pattern_str, vote_t, vote_x, reason_1, reason_2, reason_3
 
+def get_stat_by_count(items, count):
+    """Tính tỷ lệ chính xác cho số lượng tay tùy chọn"""
+    if not items or len(items) < 5:
+        return f"không đủ dữ liệu cho {count} tay"
+    
+    results = []
+    for i in range(len(items) - 4):
+        actual_item = items[i]
+        actual_result = "tài" if get_kq_type(actual_item) == 't' else "xỉu"
+        
+        past_items = items[i+1:]
+        pred_result, _, _, _, _, _, _, _ = predict_next(past_items)
+        results.append(pred_result == actual_result)
+        
+    sub_res = results[:count]
+    if not sub_res:
+        return f"không đủ dữ liệu cho {count} tay"
+        
+    wins = sub_res.count(True)
+    total = len(sub_res)
+    rate = round((wins / total) * 100)
+    return f"{wins}/{total} ({rate}%)"
+
+def calculate_accuracy_stats(items):
+    """Thống kê mặc định cho 10, 20, 30, 50 tay"""
+    stats_msg = (
+        f"📊 **thống kê độ chính xác:**\n"
+        f"• 10 tay gần nhất: **{get_stat_by_count(items, 10)}**\n"
+        f"• 20 tay gần nhất: **{get_stat_by_count(items, 20)}**\n"
+        f"• 30 tay gần nhất: **{get_stat_by_count(items, 30)}**\n"
+        f"• 50 tay gần nhất: **{get_stat_by_count(items, 50)}**"
+    )
+    return stats_msg
+
 def format_full_analysis(items):
-    """Tạo tin nhắn dự đoán đầy đủ bao gồm đánh giá dự đoán phiên trước"""
+    """Tạo tin nhắn dự đoán đầy đủ"""
     global last_prediction
     
     if not items:
@@ -206,7 +240,6 @@ def format_full_analysis(items):
     d2 = latest.get("d2", "-")
     d3 = latest.get("d3", "-")
     
-    # Đánh giá xem dự đoán phiên vừa ra có đúng không
     check_prev_str = ""
     if last_prediction and last_prediction.get("phien") == phien_id:
         prev_pred = last_prediction.get("pred")
@@ -217,13 +250,10 @@ def format_full_analysis(items):
         else:
             check_prev_str = f"🎯 **kiểm tra dự đoán phiên này:** ❌ **sai** (đã đoán: {prev_pred} | thực tế: {actual_type})\n"
 
-    # Lấy thông tin cầu 10 phiên
     cau_symbols, cau_chars = generate_cau_string(items, 10)
-    
-    # Chạy thuật toán dự đoán phiên tiếp theo
     final_pred, conf, pattern_str, vote_t, vote_x, r1, r2, r3 = predict_next(items)
+    stats_text = calculate_accuracy_stats(items)
     
-    # Lưu dự đoán cho phiên tiếp theo (mã phiên hiện tại + 1)
     try:
         next_phien_id = str(int(phien_id) + 1)
     except Exception:
@@ -255,7 +285,9 @@ def format_full_analysis(items):
         f"🔹 manual patterns: {r2}\n"
         f"🔹 du doan js: {r3}\n"
         f"🔹 combined predict: tổng hợp 20 thuật toán | độ tin cậy: {conf}%\n\n"
-        f"📊 **vote:** {total_votes_str}"
+        f"📊 **vote:** {total_votes_str}\n\n"
+        f"-----------------------------------\n"
+        f"{stats_text}"
     )
     return msg
 
@@ -289,10 +321,10 @@ async def auto_fetch_loop(app: Application):
         
         await asyncio.sleep(INTERVAL_SECONDS)
 
+# --- CÁC HÀM XỬ LÝ LỆNH ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     active_chats.add(chat_id)
-    
     raw_data = fetch_json(API_MD5_HISTORY)
     items = extract_history_items(raw_data)
     
@@ -311,14 +343,67 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("bạn chưa bật chế độ tự động.")
 
+async def handle_stat_command(update: Update, context: ContextTypes.DEFAULT_TYPE, count: int):
+    raw_data = fetch_json(API_MD5_HISTORY)
+    items = extract_history_items(raw_data)
+    if not items:
+        await update.message.reply_text("⚠️ chưa tải được dữ liệu từ api.")
+        return
+        
+    res = get_stat_by_count(items, count)
+    msg = f"📊 **thống kê độ chính xác {count} tay gần nhất:**\n👉 Kết quả: **{res}**"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+# Các handler gọi trực tiếp từng mốc tay
+async def thongke10(u, c): await handle_stat_command(u, c, 10)
+async def thongke20(u, c): await handle_stat_command(u, c, 20)
+async def thongke30(u, c): await handle_stat_command(u, c, 30)
+async def thongke40(u, c): await handle_stat_command(u, c, 40)
+async def thongke50(u, c): await handle_stat_command(u, c, 50)
+async def thongke60(u, c): await handle_stat_command(u, c, 60)
+async def thongke70(u, c): await handle_stat_command(u, c, 70)
+async def thongke80(u, c): await handle_stat_command(u, c, 80)
+async def thongke90(u, c): await handle_stat_command(u, c, 90)
+async def thongke100(u, c): await handle_stat_command(u, c, 100)
+
 async def post_init(application: Application):
+    # Đăng ký danh sách lệnh hiển thị khi người dùng gõ /
+    commands = [
+        BotCommand("start", "bật tự động dự đoán"),
+        BotCommand("stop", "tắt tự động dự đoán"),
+        BotCommand("thongke10", "xem thống kê 10 tay gần nhất"),
+        BotCommand("thongke20", "xem thống kê 20 tay gần nhất"),
+        BotCommand("thongke30", "xem thống kê 30 tay gần nhất"),
+        BotCommand("thongke40", "xem thống kê 40 tay gần nhất"),
+        BotCommand("thongke50", "xem thống kê 50 tay gần nhất"),
+        BotCommand("thongke60", "xem thống kê 60 tay gần nhất"),
+        BotCommand("thongke70", "xem thống kê 70 tay gần nhất"),
+        BotCommand("thongke80", "xem thống kê 80 tay gần nhất"),
+        BotCommand("thongke90", "xem thống kê 90 tay gần nhất"),
+        BotCommand("thongke100", "xem thống kê 100 tay gần nhất"),
+    ]
+    await application.bot.set_my_commands(commands)
     asyncio.create_task(auto_fetch_loop(application))
 
 def main():
     threading.Thread(target=run_web, daemon=True).start()
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stop", stop))
+    
+    # Đăng ký các lệnh thống kê
+    app.add_handler(CommandHandler("thongke10", thongke10))
+    app.add_handler(CommandHandler("thongke20", thongke20))
+    app.add_handler(CommandHandler("thongke30", thongke30))
+    app.add_handler(CommandHandler("thongke40", thongke40))
+    app.add_handler(CommandHandler("thongke50", thongke50))
+    app.add_handler(CommandHandler("thongke60", thongke60))
+    app.add_handler(CommandHandler("thongke70", thongke70))
+    app.add_handler(CommandHandler("thongke80", thongke80))
+    app.add_handler(CommandHandler("thongke90", thongke90))
+    app.add_handler(CommandHandler("thongke100", thongke100))
+
     app.run_polling()
 
 if __name__ == "__main__":
