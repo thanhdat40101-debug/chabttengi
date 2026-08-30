@@ -43,31 +43,38 @@ def fetch_json(url):
     return None
 
 def extract_latest_item(data):
-    """Trích xuất phần tử mới nhất từ dữ liệu JSON kiểu mảng"""
+    """Trích xuất phần tử mới nhất từ dữ liệu JSON"""
     if not data:
         return None
     if isinstance(data, list) and len(data) > 0:
         return data[0]
     if isinstance(data, dict):
-        if "phien" in data:
-            return data
         for k in ["data", "history", "list", "results"]:
             if k in data and isinstance(data[k], list) and len(data[k]) > 0:
                 return data[k][0]
+        return data
+    return None
+
+def get_phien_id(item):
+    """Lấy mã phiên chính xác dù key là 'phiên' (có dấu) hay 'phien' (không dấu)"""
+    if not isinstance(item, dict):
+        return None
+    for k in ["phiên", "phien", "session", "id", "code"]:
+        if k in item and item[k] is not None:
+            return str(item[k])
     return None
 
 def format_single_item(item):
-    """Đọc dữ liệu chính xác từ item JSON và hạ về chữ thường"""
+    """Định dạng 1 phiên kết quả về chữ thường toàn bộ"""
     if not isinstance(item, dict):
         return "không có dữ liệu hợp lệ."
 
-    phien_raw = item.get("phien")
-    phien = str(phien_raw).lower() if phien_raw is not None else "---"
+    phien_id = get_phien_id(item) or "---"
     
-    kq_raw = item.get("kết quả") or item.get("ket_qua")
+    kq_raw = item.get("kết quả") or item.get("ket_qua") or item.get("result")
     kq = str(kq_raw).lower() if kq_raw is not None else "---"
     
-    tong_raw = item.get("tổng") or item.get("tong")
+    tong_raw = item.get("tổng") or item.get("tong") or item.get("total")
     tong = str(tong_raw).lower() if tong_raw is not None else "---"
     
     d1 = item.get("d1", "-")
@@ -76,7 +83,7 @@ def format_single_item(item):
     
     return (
         f"🎲 **kết quả bàn md5**\n"
-        f"• phiên: `{phien}`\n"
+        f"• phiên: `{phien_id}`\n"
         f"• kết quả: {kq} (tổng: {tong})\n"
         f"• xúc xắc: {d1} - {d2} - {d3}"
     )
@@ -89,14 +96,12 @@ async def auto_fetch_loop(app: Application):
             latest = extract_latest_item(raw_data)
             
             if latest and isinstance(latest, dict):
-                current_phien = latest.get("phien")
+                current_phien = get_phien_id(latest)
                 
                 if current_phien is not None:
-                    current_phien_str = str(current_phien)
-                    
-                    # Chỉ phát tin nhắn khi phát hiện mã phiên khác phiên trước đó
-                    if current_phien_str != str(last_phien):
-                        last_phien = current_phien_str
+                    # So sánh để phát hiện có phiên mới
+                    if current_phien != last_phien:
+                        last_phien = current_phien
                         message = format_single_item(latest)
                         
                         for chat_id in list(active_chats):
