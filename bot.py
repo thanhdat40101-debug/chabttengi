@@ -42,21 +42,35 @@ def fetch_json(url):
         logging.error(f"lỗi kết nối api: {e}")
     return None
 
-def extract_latest_item(data):
-    """Trích xuất phần tử mới nhất từ dữ liệu JSON"""
+def extract_latest_completed_item(data):
+    """Tìm phiên mới nhất ĐÃ CÓ KẾT QUẢ trong mảng API"""
     if not data:
         return None
-    if isinstance(data, list) and len(data) > 0:
-        return data[0]
-    if isinstance(data, dict):
+    
+    items = []
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
         for k in ["data", "history", "list", "results"]:
-            if k in data and isinstance(data[k], list) and len(data[k]) > 0:
-                return data[k][0]
-        return data
-    return None
+            if k in data and isinstance(data[k], list):
+                items = data[k]
+                break
+        if not items and "phien" in data:
+            items = [data]
+
+    # Duyệt qua các phiên để lấy phiên đầu tiên đã mở kết quả (có d1, d2, d3 hoặc kết quả)
+    for item in items:
+        if isinstance(item, dict):
+            kq = item.get("kết quả") or item.get("ket_qua") or item.get("result")
+            d1 = item.get("d1")
+            # Nếu phiên đã hoàn tất (không rỗng)
+            if kq or d1 is not None:
+                return item
+                
+    # Nếu không tìm thấy phiên hoàn tất nào thì lấy item đầu tiên
+    return items[0] if items else None
 
 def get_phien_id(item):
-    """Lấy mã phiên chính xác dù key là 'phiên' (có dấu) hay 'phien' (không dấu)"""
     if not isinstance(item, dict):
         return None
     for k in ["phiên", "phien", "session", "id", "code"]:
@@ -65,7 +79,7 @@ def get_phien_id(item):
     return None
 
 def format_single_item(item):
-    """Định dạng 1 phiên kết quả về chữ thường toàn bộ"""
+    """Định dạng phiên về chữ thường hoàn toàn"""
     if not isinstance(item, dict):
         return "không có dữ liệu hợp lệ."
 
@@ -93,26 +107,25 @@ async def auto_fetch_loop(app: Application):
     while True:
         if active_chats:
             raw_data = fetch_json(API_MD5_HISTORY)
-            latest = extract_latest_item(raw_data)
+            latest = extract_latest_completed_item(raw_data)
             
             if latest and isinstance(latest, dict):
                 current_phien = get_phien_id(latest)
                 
-                if current_phien is not None:
-                    # So sánh để phát hiện có phiên mới
-                    if current_phien != last_phien:
-                        last_phien = current_phien
-                        message = format_single_item(latest)
-                        
-                        for chat_id in list(active_chats):
-                            try:
-                                await app.bot.send_message(
-                                    chat_id=chat_id, 
-                                    text=message,
-                                    parse_mode="Markdown"
-                                )
-                            except Exception as e:
-                                logging.error(f"lỗi gửi tin tới chat {chat_id}: {e}")
+                # Chỉ phát tin nhắn khi phiên mới ĐÃ CÓ KẾT QUẢ và khác phiên trước
+                if current_phien is not None and current_phien != last_phien:
+                    last_phien = current_phien
+                    message = format_single_item(latest)
+                    
+                    for chat_id in list(active_chats):
+                        try:
+                            await app.bot.send_message(
+                                chat_id=chat_id, 
+                                text=message,
+                                parse_mode="Markdown"
+                            )
+                        except Exception as e:
+                            logging.error(f"lỗi gửi tin tới chat {chat_id}: {e}")
         
         await asyncio.sleep(INTERVAL_SECONDS)
 
@@ -121,12 +134,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_chats.add(chat_id)
     
     raw_data = fetch_json(API_MD5_HISTORY)
-    latest = extract_latest_item(raw_data)
+    latest = extract_latest_completed_item(raw_data)
     
     if latest:
         msg = "✅ đã bật tự động nhận dữ liệu bàn md5!\n\n" + format_single_item(latest)
     else:
-        msg = "✅ đã bật tự động!\n\n⚠️ chưa tải được dữ liệu từ api. vui lòng đợi phiên tiếp theo..."
+        msg = "✅ đã bật tự động!\n\n⚠️ chưa tải được dữ liệu từ api."
         
     await update.message.reply_text(msg, parse_mode="Markdown")
 
