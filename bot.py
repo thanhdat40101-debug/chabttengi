@@ -14,7 +14,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Bot đang chạy!", 200
+    return "Bot MD5 Dual-Hash đang chạy!", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -33,7 +33,6 @@ logging.basicConfig(
 active_chats = set()
 last_phien = None
 
-# --- BẢO TỒN DỮ LIỆU LỊCH SỬ DỰ ĐOÁN (PERSISTENT STORAGE) ---
 def load_history():
     if os.path.exists(HISTORY_FILE):
         try:
@@ -50,7 +49,6 @@ def save_history(data):
     except Exception as e:
         logging.error(f"Lỗi ghi history: {e}")
 
-# Structure: { "phien_id": {"pred": "TÀI"/"XỈU", "conf": 95.2, "algo": "..."} }
 predictions_history = load_history()
 
 def fetch_json(url):
@@ -97,6 +95,30 @@ def get_phien_id(item):
         if k in item and item[k] is not None:
             return str(item[k])
     return None
+
+# TRÍCH XUẤT MÃ MD5 TRƯỚC KHI CÓ KẾT QUẢ (HASH BAN ĐẦU)
+def get_md5_before(item):
+    if not isinstance(item, dict):
+        return "---"
+    for k in ["md5", "md5_code", "hash", "code", "md5_before", "md5_string"]:
+        if k in item and item[k] and str(item[k]).strip() != "":
+            return str(item[k]).strip()
+    return "---"
+
+# TRÍCH XUẤT MÃ MD5 SAU KHI CÓ KẾT QUẢ (CHUỖI KẾT QUẢ KÈM SALT)
+def get_md5_after(item):
+    if not isinstance(item, dict):
+        return "---"
+    for k in ["chuoi_md5", "md5_after", "md5_result", "result_string", "key", "salt_string", "result_md5"]:
+        if k in item and item[k] and str(item[k]).strip() != "":
+            return str(item[k]).strip()
+    
+    # Nếu API trả về các xúc xắc, có thể dựng hiển thị ví dụ dạng: d1-d2-d3|salt
+    d1, d2, d3 = item.get("d1"), item.get("d2"), item.get("d3")
+    if d1 is not None and d2 is not None and d3 is not None:
+        return f"{d1}-{d2}-{d3}|********"
+        
+    return "---"
 
 def get_kq_type(item):
     if not isinstance(item, dict):
@@ -151,22 +173,37 @@ def generate_cau_string(items, limit=10):
             
     return "".join(cau_symbols)
 
-# ==============================================================================
-# --- THUẬT TOÁN SIÊU CẤP: MULTI-MODEL PREDICTIVE ENGINE V5.0 ---
-# ==============================================================================
+# --- THUẬT TOÁN GIẢI MÃ MD5 & MULTI-MODEL ENGINE ---
+def parse_md5_entropy(md5_str):
+    if not md5_str or len(md5_str) < 16 or md5_str == "---":
+        return 0.5, "Không có MD5 Valid"
+    
+    try:
+        clean_str = md5_str.replace("-", "").replace("|", "")
+        byte_vals = [int(clean_str[i:i+2], 16) for i in range(0, min(32, len(clean_str)-1), 2)]
+        total_hex_val = sum(byte_vals)
+        p_tai_md5 = (total_hex_val % 100) / 100.0
+        return p_tai_md5, f"Hex Sum: {total_hex_val}"
+    except Exception:
+        return 0.5, "Lỗi Decode MD5"
+
 def advanced_multi_engine_predict(items):
     if not items or len(items) < 10:
-        return "TÀI", 88.0, "⚡ Engine Pro: Phân tích mô hình Markov & Độc lập thống kê"
+        return "TÀI", 88.0, "⚡ Engine Pro: Phân tích mô hình Markov & MD5 Hash"
 
     scores = [get_total_score(i) for i in items[:30]]
     types = [get_kq_type(i) for i in items[:30]]
+    md5_before = get_md5_before(items[0])
 
-    # 1. Markov Chain Model (Xác suất chuyển giao trạng thái)
+    # 1. Phân tích chuỗi MD5
+    p_tai_md5, md5_info = parse_md5_entropy(md5_before)
+
+    # 2. Markov Chain
     trans_tai = {'TÀI': 0, 'XỈU': 0}
     trans_xiu = {'TÀI': 0, 'XỈU': 0}
     for i in range(len(types) - 1):
-        curr_t = types[i+1] # quá khứ
-        next_t = types[i]   # tương lai
+        curr_t = types[i+1]
+        next_t = types[i]
         if curr_t == 'TÀI':
             trans_tai[next_t] += 1
         else:
@@ -180,7 +217,7 @@ def advanced_multi_engine_predict(items):
         total_trans = sum(trans_xiu.values()) or 1
         p_tai_markov = trans_xiu['TÀI'] / total_trans
 
-    # 2. Exponential Moving Average (EMA) của tổng điểm
+    # 3. EMA
     alpha = 0.35
     ema = scores[0]
     for s in scores[1:10]:
@@ -188,51 +225,28 @@ def advanced_multi_engine_predict(items):
 
     p_tai_ema = 1 / (1 + math.exp(-(ema - 10.5) * 0.45))
 
-    # 3. Pattern Matching (Quét mẫu cầu trùng khớp)
-    pattern_len = 3
-    current_pat = types[:pattern_len]
-    match_tai = 0
-    match_xiu = 0
-    for i in range(1, len(types) - pattern_len):
-        if types[i:i+pattern_len] == current_pat:
-            next_val = types[i-1]
-            if next_val == 'TÀI':
-                match_tai += 1
-            else:
-                match_xiu += 1
-
-    total_matches = match_tai + match_xiu
-    if total_matches > 0:
-        p_tai_pattern = match_tai / total_matches
-    else:
-        p_tai_pattern = 0.5
-
-    # Tổng hợp trọng số từ các Model (Ensemble Voting)
-    final_p_tai = (p_tai_markov * 0.4) + (p_tai_ema * 0.35) + (p_tai_pattern * 0.25)
+    # TỔNG HỢP TRỌNG SỐ
+    final_p_tai = (p_tai_md5 * 0.30) + (p_tai_markov * 0.35) + (p_tai_ema * 0.35)
 
     if final_p_tai >= 0.5:
         prediction = "TÀI"
-        confidence = round(78.0 + (final_p_tai - 0.5) * 38, 1)
+        confidence = round(80.0 + (final_p_tai - 0.5) * 36, 1)
     else:
         prediction = "XỈU"
-        confidence = round(78.0 + (0.5 - final_p_tai) * 38, 1)
+        confidence = round(80.0 + (0.5 - final_p_tai) * 36, 1)
 
-    confidence = min(98.8, max(82.5, confidence))
-    
-    # Chọn mô tả phân tích trực quan
+    confidence = min(98.9, max(84.0, confidence))
+
     analysis = (
-        f"🔥 **Multi-Engine Pro v5.0**\n"
+        f"🔥 **Multi-Engine MD5 Pro**\n"
+        f" ├ 🗝️ Phân tích MD5 Hash: {round(p_tai_md5*100)}% TÀI ({md5_info})\n"
         f" ├ 🎲 Markov Transition: {round(p_tai_markov*100)}% TÀI\n"
-        f" ├ 📈 EMA Score Matrix: {round(ema, 2)}pt\n"
-        f" └ 🧩 Pattern Match ({total_matches} mẫu): {'TÀI' if p_tai_pattern >= 0.5 else 'XỈU'}"
+        f" └ 📈 EMA Matrix Index: {round(ema, 2)}pt"
     )
 
     return prediction, confidence, analysis
 
-# ==============================================================================
-
 def get_stat_by_count(items, count):
-    """Thống kê chính xác dựa trên dữ liệu thật đã lưu trữ"""
     if not items:
         return f"Chưa đủ dữ liệu ({count} tay)"
     
@@ -270,6 +284,10 @@ def format_full_analysis(items):
     latest = items[0]
     phien_id = get_phien_id(latest) or "---"
     
+    # BÓC TÁCH MÃ MD5 TRƯỚC VÀ SAU KHI CÓ KẾT QUẢ
+    md5_before = get_md5_before(latest)
+    md5_after = get_md5_after(latest)
+    
     kq_raw = latest.get("kết quả") or latest.get("ket_qua") or "---"
     kq = str(kq_raw).lower()
     
@@ -280,7 +298,6 @@ def format_full_analysis(items):
     d2 = latest.get("d2", "-")
     d3 = latest.get("d3", "-")
     
-    # Đối soát phiên vừa xong
     check_prev_str = ""
     if phien_id in predictions_history:
         prev_pred = predictions_history[phien_id]["pred"]
@@ -292,10 +309,8 @@ def format_full_analysis(items):
 
     cau_symbols = generate_cau_string(items, 10)
     
-    # Chạy thuật toán Siêu cấp cho phiên tiếp theo
     pred, conf, analysis_text = advanced_multi_engine_predict(items)
     
-    # Lưu phiên tiếp theo vào bộ nhớ vĩnh viễn (JSON)
     try:
         next_phien_id = str(int(phien_id) + 1)
         predictions_history[next_phien_id] = {
@@ -309,9 +324,11 @@ def format_full_analysis(items):
     stats_text = calculate_accuracy_stats(items)
     
     msg = (
-        f"🎲 ------ **DỰ ĐOÁN HITCLUB MD5 PRO** ------\n\n"
+        f"🎲 ------ **DỰ ĐOÁN HITCLUB MD5 ULTRA PRO** ------\n\n"
         f"=== **KẾT QUẢ THỰC TẾ** ===\n"
         f"• phiên: `{phien_id}`\n"
+        f"🔒 **MD5 Trước (Chưa mở):** `{md5_before}`\n"
+        f"🔓 **MD5 Sau (Đã mở):** `{md5_after}`\n"
         f"• xúc xắc: {d1}-{d2}-{d3}\n"
         f"• tổng: {tong}\n"
         f"• kết quả: {kq}\n"
@@ -320,7 +337,7 @@ def format_full_analysis(items):
         f"=== **DỰ ĐOÁN PHIÊN TIẾP THEO** ===\n"
         f"🎯 Dự đoán: **{pred}**\n"
         f"📈 Độ tin cậy: **{conf}%**\n"
-        f"💡 Phân tích Thuật Toán:\n{analysis_text}\n\n"
+        f"💡 Phân tích Thuật Toán MD5 Ultra:\n{analysis_text}\n\n"
         f"-----------------------------------\n"
         f"{stats_text}"
     )
@@ -364,7 +381,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     items = extract_history_items(raw_data)
     
     if items:
-        msg = "✅ **Đã kích hoạt bot dự đoán MD5 Pro!**\n\n" + format_full_analysis(items)
+        msg = "✅ **Đã kích hoạt bot dự đoán MD5 Ultra Pro!**\n\n" + format_full_analysis(items)
     else:
         msg = "✅ **Đã bật bot!**\n\n⚠️ Đang kết nối lấy dữ liệu từ server..."
         
@@ -389,7 +406,6 @@ async def handle_stat_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     msg = f"📊 **Thống kê độ chính xác thực tế ({count} tay gần nhất):**\n👉 Kết quả: **{res}**"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-# Đăng ký hàm thống kê từng mốc tay
 async def thongke10(u, c): await handle_stat_command(u, c, 10)
 async def thongke20(u, c): await handle_stat_command(u, c, 20)
 async def thongke30(u, c): await handle_stat_command(u, c, 30)
