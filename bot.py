@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import requests
 from flask import Flask
@@ -14,7 +15,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Bot MD5 Dual-Hash đang chạy!", 200
+    return "Bot MD5 Ultra Scanner đang chạy!", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -96,24 +97,43 @@ def get_phien_id(item):
             return str(item[k])
     return None
 
-# TRÍCH XUẤT MÃ MD5 TRƯỚC KHI CÓ KẾT QUẢ (HASH BAN ĐẦU)
+# ==============================================================================
+# --- QUÉT SÂU CHUỖI MD5 BẰNG REGEX (QUÉT TOÀN BỘ KEYS TRONG API) ---
+# ==============================================================================
 def get_md5_before(item):
     if not isinstance(item, dict):
         return "---"
-    for k in ["md5", "md5_code", "hash", "code", "md5_before", "md5_string"]:
-        if k in item and item[k] and str(item[k]).strip() != "":
-            return str(item[k]).strip()
+    
+    # 1. Thử kiểm tra các key phổ biến
+    for k in item:
+        v = str(item[k]).strip()
+        # Chuỗi MD5 chuẩn là 32 ký tự Hex (0-9, a-f, A-F)
+        if len(v) == 32 and re.match(r'^[a-fA-F0-9]{32}$', v):
+            return v
+            
+    # 2. Tìm theo tên key chứa từ md5/hash/code
+    for k, v in item.items():
+        if any(x in k.lower() for x in ["md5", "hash", "code"]):
+            if v and str(v).strip() != "":
+                return str(v).strip()
+                
     return "---"
 
-# TRÍCH XUẤT MÃ MD5 SAU KHI CÓ KẾT QUẢ (CHUỖI KẾT QUẢ KÈM SALT)
 def get_md5_after(item):
     if not isinstance(item, dict):
         return "---"
-    for k in ["chuoi_md5", "md5_after", "md5_result", "result_string", "key", "salt_string", "result_md5"]:
-        if k in item and item[k] and str(item[k]).strip() != "":
-            return str(item[k]).strip()
     
-    # Nếu API trả về các xúc xắc, có thể dựng hiển thị ví dụ dạng: d1-d2-d3|salt
+    # Tìm các chuỗi có dấu gạch ngang, gạch đứng hoặc chứa thông tin chuỗi kết quả
+    for k, v in item.items():
+        v_str = str(v).strip()
+        if any(x in k.lower() for x in ["chuoi", "after", "result_str", "key", "salt"]):
+            if v_str:
+                return v_str
+        # Bắt chuỗi kiểu "5-4-3|xxxx" hoặc dạng chuỗi kết quả có Salt dài
+        if ("|" in v_str or "-" in v_str) and len(v_str) > 10 and not k.lower() in ["phien", "phiên"]:
+            return v_str
+            
+    # Nếu không tìm thấy, ghép tự động từ d1, d2, d3
     d1, d2, d3 = item.get("d1"), item.get("d2"), item.get("d3")
     if d1 is not None and d2 is not None and d3 is not None:
         return f"{d1}-{d2}-{d3}|********"
@@ -282,9 +302,12 @@ def format_full_analysis(items):
         return "⚠️ Không có dữ liệu API hợp lệ."
 
     latest = items[0]
+    
+    # Log cấu trúc JSON thực tế ra Terminal để dễ theo dõi
+    logging.info(f"JSON Item Sample: {json.dumps(latest, ensure_ascii=False)}")
+
     phien_id = get_phien_id(latest) or "---"
     
-    # BÓC TÁCH MÃ MD5 TRƯỚC VÀ SAU KHI CÓ KẾT QUẢ
     md5_before = get_md5_before(latest)
     md5_after = get_md5_after(latest)
     
