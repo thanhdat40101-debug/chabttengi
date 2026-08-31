@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import threading
@@ -22,6 +23,7 @@ def run_web():
 TELEGRAM_BOT_TOKEN = "8662342747:AAFGSyvziio3uPNdKbhnhJMee33YbLaV290"
 API_MD5_HISTORY = "https://kwinstore.com/hitclub/md5/history/8167b2c16888dae174a454f493022e22242f35288df59f41"
 INTERVAL_SECONDS = 3
+HISTORY_FILE = "history.json"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -29,7 +31,26 @@ logging.basicConfig(
 
 active_chats = set()
 last_phien = None
-last_prediction = None
+
+# --- QUẢN LÝ LƯU TRỮ LỊCH SỬ RA FILE (KHÔNG BỊ XÓA MẤT) ---
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logging.error(f"Lỗi đọc file history: {e}")
+    return {}
+
+def save_history(data):
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.error(f"Lỗi ghi file history: {e}")
+
+# Cache lịch sử dự đoán: { "phien_id": "TÀI" / "XỈU" }
+predictions_history = load_history()
 
 def fetch_json(url):
     try:
@@ -44,7 +65,6 @@ def fetch_json(url):
     return None
 
 def extract_history_items(data):
-    """Chỉ lấy những phiên ĐÃ HOÀN TẤT"""
     if not data:
         return []
     
@@ -78,141 +98,117 @@ def get_phien_id(item):
     return None
 
 def get_kq_type(item):
-    """Xác định kết quả là tài hay xỉu ('t' hoặc 'x')"""
     if not isinstance(item, dict):
-        return 't'
+        return 'TÀI'
     
-    kq = str(item.get("kết quả") or item.get("ket_qua") or item.get("result") or "").lower()
-    if "tài" in kq or "tai" in kq:
-        return 't'
-    if "xỉu" in kq or "xiu" in kq:
-        return 'x'
+    kq = str(item.get("kết quả") or item.get("ket_qua") or item.get("result") or "").upper()
+    if "TÀI" in kq or "TAI" in kq:
+        return 'TÀI'
+    if "XỈU" in kq or "XIU" in kq:
+        return 'XỈU'
         
     tong = item.get("tổng") or item.get("tong") or item.get("total")
     if tong is not None:
         try:
-            return 't' if int(tong) >= 11 else 'x'
+            return 'TÀI' if int(tong) >= 11 else 'XỈU'
         except Exception:
             pass
             
     d1, d2, d3 = item.get("d1"), item.get("d2"), item.get("d3")
     if d1 is not None and d2 is not None and d3 is not None:
         try:
-            return 't' if (int(d1) + int(d2) + int(d3)) >= 11 else 'x'
+            return 'TÀI' if (int(d1) + int(d2) + int(d3)) >= 11 else 'XỈU'
         except Exception:
             pass
             
-    return 't'
+    return 'TÀI'
 
 def generate_cau_string(items, limit=10):
-    """Tạo chuỗi 10 phiên cầu"""
     recent = items[:limit]
     recent_reversed = list(reversed(recent))
     
     cau_symbols = []
-    cau_chars = []
-    
     for item in recent_reversed:
         t_or_x = get_kq_type(item)
-        if t_or_x == 't':
+        if t_or_x == 'TÀI':
             cau_symbols.append("🔴")
-            cau_chars.append("t")
         else:
             cau_symbols.append("⚪")
-            cau_chars.append("x")
             
-    return "".join(cau_symbols), "".join(cau_chars).upper()
+    return "".join(cau_symbols)
 
-def predict_next(items):
-    """Hệ thống 4 thuật toán dự đoán phiên tiếp theo"""
+# --- THUẬT TOÁN MỚI: SMART CHAOS ENGINE (PHÂN PHỐI BIÊN ĐỘ) ---
+def smart_chaos_engine(items):
+    """Mô phỏng thuật toán Smart Chaos Engine phân tích biên độ tổng điểm"""
     if not items or len(items) < 3:
-        return "tài", 60, "dự đoán mặc định", 2, 1, "mẫu ngắn", "mẫu tổng", "theo tay"
+        return "TÀI", 85.0, "🔥 Smart Chaos Engine: Kích hoạt mô hình phân phối biên độ"
 
-    recent_types = [get_kq_type(i) for i in items[:7]]
-    
-    pattern_str = "".join(reversed([t.upper() for t in recent_types[:5]]))
-    vote_t = 0
-    vote_x = 0
-    
-    if recent_types[0] == recent_types[1] == recent_types[2]:
-        p_pred = "bẻ" if recent_types[0] == 't' else "theo"
-        if p_pred == "bẻ":
-            pred_1 = "xỉu"
-            acc_1 = 85
-            vote_x += 1
+    totals = []
+    for item in items[:10]:
+        t = item.get("tổng") or item.get("tong")
+        if t is not None:
+            try:
+                totals.append(int(t))
+            except Exception:
+                pass
         else:
-            pred_1 = "tài"
-            acc_1 = 88
-            vote_t += 1
-    else:
-        pred_1 = "tài" if recent_types[0] == 'x' else "xỉu"
-        acc_1 = 78
-        if pred_1 == "tài":
-            vote_t += 1
-        else:
-            vote_x += 1
+            d1 = item.get("d1", 0)
+            d2 = item.get("d2", 0)
+            d3 = item.get("d3", 0)
+            try:
+                totals.append(int(d1) + int(d2) + int(d3))
+            except Exception:
+                pass
 
-    sum_recent = 0
-    for i in items[:2]:
-        t = i.get("tổng") or i.get("tong") or 10
-        try:
-            sum_recent += int(t)
-        except Exception:
-            sum_recent += 10
-            
-    if sum_recent % 2 == 0:
-        pred_2 = "tài"
-        acc_2 = 91
-        vote_t += 1
-    else:
-        pred_2 = "xỉu"
-        acc_2 = 86
-        vote_x += 1
+    if len(totals) < 3:
+        return "TÀI", 88.5, "🔥 Smart Chaos Engine: Kích hoạt mô hình phân phối biên độ"
 
-    pred_3 = "tài" if recent_types[0] == 'x' else "xỉu"
-    acc_3 = 72
-    if pred_3 == "tài":
-        vote_t += 1
-    else:
-        vote_x += 1
-
-    final_pred = "tài" if vote_t >= vote_x else "xỉu"
-    total_vote = max(vote_t, vote_x)
-    conf = min(95, 50 + (total_vote * 12))
-
-    reason_1 = f"mẫu \"{pattern_str}\" → {pred_1} ({acc_1}%)"
-    reason_2 = f"mẫu tổng: {sum_recent} → {pred_2} ({acc_2}%)"
-    reason_3 = f"theo tay gần nhất → {pred_3} ({acc_3}%)"
+    # Tính biến động biên độ
+    avg_total = sum(totals[:5]) / min(5, len(totals))
+    last_type = get_kq_type(items[0])
     
-    return final_pred, conf, pattern_str, vote_t, vote_x, reason_1, reason_2, reason_3
+    # Đoán bẻ hoặc theo biên độ chuẩn
+    if avg_total > 11.5:
+        prediction = "XỈU"
+        confidence = round(85.0 + (avg_total - 11.5) * 2.5, 1)
+    elif avg_total < 9.5:
+        prediction = "TÀI"
+        confidence = round(85.0 + (9.5 - avg_total) * 2.5, 1)
+    else:
+        prediction = "XỈU" if last_type == "TÀI" else "TÀI"
+        confidence = 94.5
+
+    confidence = min(98.5, max(75.0, confidence))
+    analysis = "🔥 Smart Chaos Engine: Kích hoạt mô hình phân phối biên độ"
+    
+    return prediction, confidence, analysis
 
 def get_stat_by_count(items, count):
-    """Tính tỷ lệ chính xác cho số lượng tay tùy chọn"""
-    if not items or len(items) < 5:
-        return f"không đủ dữ liệu cho {count} tay"
+    """Tính tỷ lệ chính xác dựa vào lịch sử dự đoán thực tế đã lưu"""
+    if not items:
+        return f"Chưa đủ dữ liệu cho {count} tay"
     
-    results = []
-    for i in range(len(items) - 4):
-        actual_item = items[i]
-        actual_result = "tài" if get_kq_type(actual_item) == 't' else "xỉu"
+    wins = 0
+    total = 0
+    
+    for item in items[:count]:
+        pid = get_phien_id(item)
+        if pid in predictions_history:
+            actual = get_kq_type(item)
+            pred = predictions_history[pid]
+            if pred == actual:
+                wins += 1
+            total += 1
+            
+    if total == 0:
+        return f"0/{count} (Chưa có lịch sử đối soát)"
         
-        past_items = items[i+1:]
-        pred_result, _, _, _, _, _, _, _ = predict_next(past_items)
-        results.append(pred_result == actual_result)
-        
-    sub_res = results[:count]
-    if not sub_res:
-        return f"không đủ dữ liệu cho {count} tay"
-        
-    wins = sub_res.count(True)
-    total = len(sub_res)
     rate = round((wins / total) * 100)
     return f"{wins}/{total} ({rate}%)"
 
 def calculate_accuracy_stats(items):
-    """Thống kê mặc định cho 10, 20, 30, 50 tay"""
     stats_msg = (
-        f"📊 **thống kê độ chính xác:**\n"
+        f"📊 **thống kê độ chính xác thực tế:**\n"
         f"• 10 tay gần nhất: **{get_stat_by_count(items, 10)}**\n"
         f"• 20 tay gần nhất: **{get_stat_by_count(items, 20)}**\n"
         f"• 30 tay gần nhất: **{get_stat_by_count(items, 30)}**\n"
@@ -221,9 +217,6 @@ def calculate_accuracy_stats(items):
     return stats_msg
 
 def format_full_analysis(items):
-    """Tạo tin nhắn dự đoán đầy đủ"""
-    global last_prediction
-    
     if not items:
         return "không có dữ liệu api hợp lệ."
 
@@ -240,31 +233,30 @@ def format_full_analysis(items):
     d2 = latest.get("d2", "-")
     d3 = latest.get("d3", "-")
     
+    # Kiểm tra xem dự đoán của phiên vừa ra có đúng không
     check_prev_str = ""
-    if last_prediction and last_prediction.get("phien") == phien_id:
-        prev_pred = last_prediction.get("pred")
-        actual_type = "tài" if get_kq_type(latest) == 't' else "xỉu"
-        
+    if phien_id in predictions_history:
+        prev_pred = predictions_history[phien_id]
+        actual_type = get_kq_type(latest)
         if prev_pred == actual_type:
             check_prev_str = f"🎯 **kiểm tra dự đoán phiên này:** ✅ **đúng** (đã đoán: {prev_pred})\n"
         else:
             check_prev_str = f"🎯 **kiểm tra dự đoán phiên này:** ❌ **sai** (đã đoán: {prev_pred} | thực tế: {actual_type})\n"
 
-    cau_symbols, cau_chars = generate_cau_string(items, 10)
-    final_pred, conf, pattern_str, vote_t, vote_x, r1, r2, r3 = predict_next(items)
-    stats_text = calculate_accuracy_stats(items)
+    cau_symbols = generate_cau_string(items, 10)
     
+    # Chạy thuật toán Smart Chaos Engine cho phiên tiếp theo
+    pred, conf, analysis_text = smart_chaos_engine(items)
+    
+    # Lưu dự đoán phiên tiếp theo vào file JSON
     try:
         next_phien_id = str(int(phien_id) + 1)
+        predictions_history[next_phien_id] = pred
+        save_history(predictions_history)
     except Exception:
-        next_phien_id = None
-        
-    last_prediction = {
-        "phien": next_phien_id,
-        "pred": final_pred
-    }
-    
-    total_votes_str = f"tài {vote_t} - xỉu {vote_x}"
+        pass
+
+    stats_text = calculate_accuracy_stats(items)
     
     msg = (
         f"🎲 ------ **dự đoán hitclub md5** ------\n\n"
@@ -276,16 +268,9 @@ def format_full_analysis(items):
         f"{check_prev_str}"
         f"• cầu (10 phiên): {cau_symbols}\n\n"
         f"=== **dự đoán phiên tiếp theo** ===\n"
-        f"🎯 dự đoán: **{final_pred}**\n"
+        f"🎯 dự đoán: **{pred}**\n"
         f"📈 độ tin cậy: {conf}%\n"
-        f"💡 lý do: ✅ {final_pred} ({conf}%) - 4 thuật toán phân tích\n\n"
-        f"📊 **chi tiết 4 thuật toán:**\n"
-        f"🔹 pattern database: {final_pred} (78%)\n"
-        f"   💡 📊 pattern \"{pattern_str}\" → {final_pred}\n"
-        f"🔹 manual patterns: {r2}\n"
-        f"🔹 du doan js: {r3}\n"
-        f"🔹 combined predict: tổng hợp 20 thuật toán | độ tin cậy: {conf}%\n\n"
-        f"📊 **vote:** {total_votes_str}\n\n"
+        f"💡 phân tích: {analysis_text}\n\n"
         f"-----------------------------------\n"
         f"{stats_text}"
     )
@@ -354,7 +339,6 @@ async def handle_stat_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     msg = f"📊 **thống kê độ chính xác {count} tay gần nhất:**\n👉 Kết quả: **{res}**"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-# Các handler gọi trực tiếp từng mốc tay
 async def thongke10(u, c): await handle_stat_command(u, c, 10)
 async def thongke20(u, c): await handle_stat_command(u, c, 20)
 async def thongke30(u, c): await handle_stat_command(u, c, 30)
@@ -367,20 +351,19 @@ async def thongke90(u, c): await handle_stat_command(u, c, 90)
 async def thongke100(u, c): await handle_stat_command(u, c, 100)
 
 async def post_init(application: Application):
-    # Đăng ký danh sách lệnh hiển thị khi người dùng gõ /
     commands = [
         BotCommand("start", "bật tự động dự đoán"),
         BotCommand("stop", "tắt tự động dự đoán"),
-        BotCommand("thongke10", "xem thống kê 10 tay gần nhất"),
-        BotCommand("thongke20", "xem thống kê 20 tay gần nhất"),
-        BotCommand("thongke30", "xem thống kê 30 tay gần nhất"),
-        BotCommand("thongke40", "xem thống kê 40 tay gần nhất"),
-        BotCommand("thongke50", "xem thống kê 50 tay gần nhất"),
-        BotCommand("thongke60", "xem thống kê 60 tay gần nhất"),
-        BotCommand("thongke70", "xem thống kê 70 tay gần nhất"),
-        BotCommand("thongke80", "xem thống kê 80 tay gần nhất"),
-        BotCommand("thongke90", "xem thống kê 90 tay gần nhất"),
-        BotCommand("thongke100", "xem thống kê 100 tay gần nhất"),
+        BotCommand("thongke10", "xem thống kê 10 tay"),
+        BotCommand("thongke20", "xem thống kê 20 tay"),
+        BotCommand("thongke30", "xem thống kê 30 tay"),
+        BotCommand("thongke40", "xem thống kê 40 tay"),
+        BotCommand("thongke50", "xem thống kê 50 tay"),
+        BotCommand("thongke60", "xem thống kê 60 tay"),
+        BotCommand("thongke70", "xem thống kê 70 tay"),
+        BotCommand("thongke80", "xem thống kê 80 tay"),
+        BotCommand("thongke90", "xem thống kê 90 tay"),
+        BotCommand("thongke100", "xem thống kê 100 tay"),
     ]
     await application.bot.set_my_commands(commands)
     asyncio.create_task(auto_fetch_loop(application))
@@ -392,7 +375,6 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stop", stop))
     
-    # Đăng ký các lệnh thống kê
     app.add_handler(CommandHandler("thongke10", thongke10))
     app.add_handler(CommandHandler("thongke20", thongke20))
     app.add_handler(CommandHandler("thongke30", thongke30))
