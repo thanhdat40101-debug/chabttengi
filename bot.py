@@ -15,7 +15,7 @@ web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Bot MD5 Ultra Scanner đang chạy!", 200
+    return "Bot SHA256/MD5 Ultra Scanner đang chạy!", 200
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -98,45 +98,49 @@ def get_phien_id(item):
     return None
 
 # ==============================================================================
-# --- QUÉT SÂU CHUỖI MD5 BẰNG REGEX (QUÉT TOÀN BỘ KEYS TRONG API) ---
+# --- TRÍCH XUẤT HASH CHUẨN THEO API DỮ LIỆU THỰC TẾ ---
 # ==============================================================================
 def get_md5_before(item):
+    """Lấy chuỗi Hash chưa mở (SHA256 64 ký tự hoặc MD5 32 ký tự)"""
     if not isinstance(item, dict):
         return "---"
     
-    # 1. Thử kiểm tra các key phổ biến
-    for k in item:
-        v = str(item[k]).strip()
-        # Chuỗi MD5 chuẩn là 32 ký tự Hex (0-9, a-f, A-F)
-        if len(v) == 32 and re.match(r'^[a-fA-F0-9]{32}$', v):
-            return v
-            
-    # 2. Tìm theo tên key chứa từ md5/hash/code
+    # Check các key API chuẩn trong hình: sha256, sha256check
+    for key in ["sha256", "sha256check", "md5", "hash"]:
+        if key in item and item[key]:
+            val = str(item[key]).strip()
+            if len(val) in [32, 64]:
+                return val
+                
+    # Dự phòng tìm quét chuỗi Hex
     for k, v in item.items():
-        if any(x in k.lower() for x in ["md5", "hash", "code"]):
-            if v and str(v).strip() != "":
-                return str(v).strip()
+        v_str = str(v).strip()
+        if len(v_str) in [32, 64] and re.match(r'^[a-fA-F0-9]+$', v_str):
+            if k.lower() not in ["gid", "game"]:
+                return v_str
                 
     return "---"
 
 def get_md5_after(item):
+    """Lấy chuỗi giải mã đã mở (sha256raw) chứa chuỗi xúc xắc dạng {5-4-6}"""
     if not isinstance(item, dict):
         return "---"
     
-    # Tìm các chuỗi có dấu gạch ngang, gạch đứng hoặc chứa thông tin chuỗi kết quả
+    # Check key API chuẩn: sha256raw
+    for key in ["sha256raw", "md5raw", "raw", "chuoi"]:
+        if key in item and item[key]:
+            return str(item[key]).strip()
+            
+    # Dự phòng nhận diện qua ngoặc nhọn
     for k, v in item.items():
         v_str = str(v).strip()
-        if any(x in k.lower() for x in ["chuoi", "after", "result_str", "key", "salt"]):
-            if v_str:
-                return v_str
-        # Bắt chuỗi kiểu "5-4-3|xxxx" hoặc dạng chuỗi kết quả có Salt dài
-        if ("|" in v_str or "-" in v_str) and len(v_str) > 10 and not k.lower() in ["phien", "phiên"]:
+        if "{" in v_str and "}" in v_str:
             return v_str
             
-    # Nếu không tìm thấy, ghép tự động từ d1, d2, d3
+    # Ghép mặc định nếu không tìm thấy
     d1, d2, d3 = item.get("d1"), item.get("d2"), item.get("d3")
     if d1 is not None and d2 is not None and d3 is not None:
-        return f"{d1}-{d2}-{d3}|********"
+        return f"{{{d1}-{d2}-{d3}}}|********"
         
     return "---"
 
@@ -193,30 +197,30 @@ def generate_cau_string(items, limit=10):
             
     return "".join(cau_symbols)
 
-# --- THUẬT TOÁN GIẢI MÃ MD5 & MULTI-MODEL ENGINE ---
-def parse_md5_entropy(md5_str):
-    if not md5_str or len(md5_str) < 16 or md5_str == "---":
-        return 0.5, "Không có MD5 Valid"
+# --- THUẬT TOÁN GIẢI MÃ SHA256/MD5 & MULTI-ENGINE ---
+def parse_md5_entropy(hash_str):
+    if not hash_str or hash_str == "---" or len(hash_str) not in [32, 64]:
+        return 0.5, "Không có SHA/MD5 Valid"
     
     try:
-        clean_str = md5_str.replace("-", "").replace("|", "")
-        byte_vals = [int(clean_str[i:i+2], 16) for i in range(0, min(32, len(clean_str)-1), 2)]
+        clean_str = re.sub(r'[^a-fA-F0-9]', '', hash_str)
+        byte_vals = [int(clean_str[i:i+2], 16) for i in range(0, len(clean_str)-1, 2)]
         total_hex_val = sum(byte_vals)
-        p_tai_md5 = (total_hex_val % 100) / 100.0
-        return p_tai_md5, f"Hex Sum: {total_hex_val}"
+        p_tai_hash = (total_hex_val % 100) / 100.0
+        return p_tai_hash, f"Entropy Sum: {total_hex_val}"
     except Exception:
-        return 0.5, "Lỗi Decode MD5"
+        return 0.5, "Lỗi Decode Hash"
 
 def advanced_multi_engine_predict(items):
     if not items or len(items) < 10:
-        return "TÀI", 88.0, "⚡ Engine Pro: Phân tích mô hình Markov & MD5 Hash"
+        return "TÀI", 88.0, "⚡ Engine Pro: Phân tích mô hình Markov & Hash Matrix"
 
     scores = [get_total_score(i) for i in items[:30]]
     types = [get_kq_type(i) for i in items[:30]]
-    md5_before = get_md5_before(items[0])
+    hash_before = get_md5_before(items[0])
 
-    # 1. Phân tích chuỗi MD5
-    p_tai_md5, md5_info = parse_md5_entropy(md5_before)
+    # 1. Phân tích Hash Entropy
+    p_tai_hash, hash_info = parse_md5_entropy(hash_before)
 
     # 2. Markov Chain
     trans_tai = {'TÀI': 0, 'XỈU': 0}
@@ -246,7 +250,7 @@ def advanced_multi_engine_predict(items):
     p_tai_ema = 1 / (1 + math.exp(-(ema - 10.5) * 0.45))
 
     # TỔNG HỢP TRỌNG SỐ
-    final_p_tai = (p_tai_md5 * 0.30) + (p_tai_markov * 0.35) + (p_tai_ema * 0.35)
+    final_p_tai = (p_tai_hash * 0.30) + (p_tai_markov * 0.35) + (p_tai_ema * 0.35)
 
     if final_p_tai >= 0.5:
         prediction = "TÀI"
@@ -258,8 +262,8 @@ def advanced_multi_engine_predict(items):
     confidence = min(98.9, max(84.0, confidence))
 
     analysis = (
-        f"🔥 **Multi-Engine MD5 Pro**\n"
-        f" ├ 🗝️ Phân tích MD5 Hash: {round(p_tai_md5*100)}% TÀI ({md5_info})\n"
+        f"🔥 **Multi-Engine MD5/SHA256 Pro**\n"
+        f" ├ 🗝️ Phân tích Hash: {round(p_tai_hash*100)}% TÀI ({hash_info})\n"
         f" ├ 🎲 Markov Transition: {round(p_tai_markov*100)}% TÀI\n"
         f" └ 📈 EMA Matrix Index: {round(ema, 2)}pt"
     )
@@ -302,14 +306,11 @@ def format_full_analysis(items):
         return "⚠️ Không có dữ liệu API hợp lệ."
 
     latest = items[0]
-    
-    # Log cấu trúc JSON thực tế ra Terminal để dễ theo dõi
-    logging.info(f"JSON Item Sample: {json.dumps(latest, ensure_ascii=False)}")
 
     phien_id = get_phien_id(latest) or "---"
     
-    md5_before = get_md5_before(latest)
-    md5_after = get_md5_after(latest)
+    hash_before = get_md5_before(latest)
+    hash_after = get_md5_after(latest)
     
     kq_raw = latest.get("kết quả") or latest.get("ket_qua") or "---"
     kq = str(kq_raw).lower()
@@ -350,8 +351,8 @@ def format_full_analysis(items):
         f"🎲 ------ **DỰ ĐOÁN HITCLUB MD5 ULTRA PRO** ------\n\n"
         f"=== **KẾT QUẢ THỰC TẾ** ===\n"
         f"• phiên: `{phien_id}`\n"
-        f"🔒 **MD5 Trước (Chưa mở):** `{md5_before}`\n"
-        f"🔓 **MD5 Sau (Đã mở):** `{md5_after}`\n"
+        f"🔒 **MD5/SHA256 Trước (Chưa mở):** `{hash_before}`\n"
+        f"🔓 **MD5/SHA256 Sau (Đã mở):** `{hash_after}`\n"
         f"• xúc xắc: {d1}-{d2}-{d3}\n"
         f"• tổng: {tong}\n"
         f"• kết quả: {kq}\n"
